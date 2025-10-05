@@ -18,45 +18,59 @@ jobs:
       
       - name: Set up environment
         run: |
-          mkdir -p artifacts downloads
+          mkdir -p artifacts selected
       
       - name: Download artifacts from source repository
         uses: dawidd6/action-download-artifact@v3
         with:
-          # 替换为源仓库的所有者和仓库名
           repo: Shopkeepers/Shopkeepers
-          # 源仓库的工作流文件名或ID
           workflow: build.yml
-          # 分支名，默认为main
           branch: master
-          # 使用正确的参数名 workflow_conclusion 替代 status
           workflow_conclusion: success
-          # 下载路径
-          path: ./downloads
-          # 必须提供github_token参数
+          path: ./artifacts
           github_token: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Unzip artifacts
+      - name: List all downloaded files (for debugging)
         run: |
-          # 解压所有下载的zip文件到artifacts目录
-          for file in ./downloads/**/*.zip; do
-            unzip -d ./artifacts "$file"
-          done
+          echo "All downloaded files:"
+          find ./artifacts -type f
       
-      - name: Get current date for release tag
-        id: date
-        run: echo "::set-output name=tag::release-$(date +'%Y%m%d')"
+      - name: Select only Shopkeepers-*-SNAPSHOT.jar files
+        id: select_jar
+        run: |
+          # 查找符合命名模式的JAR文件
+          JAR_FILE=$(find ./artifacts -name "Shopkeepers-*-SNAPSHOT.jar" | head -n 1)
+          
+          # 检查是否找到文件
+          if [ -z "$JAR_FILE" ]; then
+            echo "Error: No Shopkeepers-*-SNAPSHOT.jar file found!"
+            exit 1
+          fi
+          
+          # 复制选中的文件到单独目录
+          cp "$JAR_FILE" ./selected/
+          
+          # 提取版本号
+          VERSION=$(basename "$JAR_FILE" | sed -E 's/Shopkeepers-(.*)\.jar/\1/')
+          echo "Found version: $VERSION"
+          echo "::set-output name=version::$VERSION"
+          echo "::set-output name=jar_path::$JAR_FILE"
+      
+      - name: List selected files
+        run: |
+          echo "Selected files to release:"
+          find ./selected -type f
       
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.date.outputs.tag }}
-          name: Automated Release ${{ steps.date.outputs.tag }}
+          tag_name: release-${{ steps.select_jar.outputs.version }}
+          name: Release ${{ steps.select_jar.outputs.version }}
           body: |
-            This is an automated release containing artifacts from the source repository.
+            This is an automated release containing the Shopkeepers snapshot build.
+            Version: ${{ steps.select_jar.outputs.version }}
             Generated on: ${{ github.event.head_commit.timestamp }}
           files: |
-            ./artifacts/**/*
+            ./selected/*.jar
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    
