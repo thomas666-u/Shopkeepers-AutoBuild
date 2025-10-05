@@ -28,7 +28,7 @@ jobs:
           # 源仓库的工作流文件名或ID
           workflow: build.yml
           # 分支名，默认为main
-          branch: main
+          branch: master
           # 使用正确的参数名 workflow_conclusion 替代 status
           workflow_conclusion: success
           # 下载路径
