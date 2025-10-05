@@ -6,7 +6,7 @@ name: Fetch Artifacts and Create Release
 on:
   workflow_dispatch:  # 允许手动触发
   schedule:
-    - cron: ''0 */6 * * *''  # 6h/次
+    - cron: '0 */6 * * *'  # 6h/次
 
 jobs:
   fetch-and-release:
