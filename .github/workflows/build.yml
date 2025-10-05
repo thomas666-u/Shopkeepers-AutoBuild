@@ -29,12 +29,12 @@ jobs:
           workflow: build.yml
           # 分支名，默认为main
           branch: main
-          # 下载最新的成功运行的artifacts
-          status: success
+          # 使用正确的参数名 workflow_conclusion 替代 status
+          workflow_conclusion: success
           # 下载路径
           path: ./downloads
-          # 源仓库的访问令牌，如果是私有仓库需要提供
-          github_token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          # 必须提供github_token参数
+          github_token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Unzip artifacts
         run: |
