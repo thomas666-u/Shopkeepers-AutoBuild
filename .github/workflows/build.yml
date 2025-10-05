@@ -20,6 +20,16 @@ jobs:
         run: |
           mkdir -p artifacts selected
       
+      - name: Generate random string
+        id: random
+        run: |
+          # 生成8位随机字母数字字符
+          RANDOM_STR=$(openssl rand -hex 4)
+          echo "::set-output name=str::$RANDOM_STR"
+          # 也可以使用时间戳作为替代方案
+          TIMESTAMP=$(date +'%Y%m%d%H%M%S')
+          echo "::set-output name=timestamp::$TIMESTAMP"
+      
       - name: Download artifacts from source repository
         uses: dawidd6/action-download-artifact@v3
         with:
@@ -29,11 +39,6 @@ jobs:
           workflow_conclusion: success
           path: ./artifacts
           github_token: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: List all downloaded files (for debugging)
-        run: |
-          echo "All downloaded files:"
-          find ./artifacts -type f
       
       - name: Select only Shopkeepers-*-SNAPSHOT.jar files
         id: select_jar
@@ -50,25 +55,29 @@ jobs:
           # 复制选中的文件到单独目录
           cp "$JAR_FILE" ./selected/
           
-          # 提取版本号
-          VERSION=$(basename "$JAR_FILE" | sed -E 's/Shopkeepers-(.*)\.jar/\1/')
-          echo "Found version: $VERSION"
-          echo "::set-output name=version::$VERSION"
+          # 提取基础版本号
+          BASE_VERSION=$(basename "$JAR_FILE" | sed -E 's/Shopkeepers-(.*)\.jar/\1/')
+          echo "Base version: $BASE_VERSION"
+          echo "::set-output name=base_version::$BASE_VERSION"
           echo "::set-output name=jar_path::$JAR_FILE"
       
-      - name: List selected files
+      - name: Create unique version and tag
+        id: version
         run: |
-          echo "Selected files to release:"
-          find ./selected -type f
+          # 结合基础版本号、随机字符串和时间戳确保唯一性
+          UNIQUE_VERSION="${{ steps.select_jar.outputs.base_version }}-${{ steps.random.outputs.timestamp }}-${{ steps.random.outputs.str }}"
+          echo "::set-output name=unique_version::$UNIQUE_VERSION"
+          echo "::set-output name=tag::release-$UNIQUE_VERSION"
       
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: release-${{ steps.select_jar.outputs.version }}
-          name: Release ${{ steps.select_jar.outputs.version }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.unique_version }}
           body: |
             This is an automated release containing the Shopkeepers snapshot build.
-            Version: ${{ steps.select_jar.outputs.version }}
+            Base Version: ${{ steps.select_jar.outputs.base_version }}
+            Unique Version: ${{ steps.version.outputs.unique_version }}
             Generated on: ${{ github.event.head_commit.timestamp }}
           files: |
             ./selected/*.jar
