@@ -1,81 +1,110 @@
-name: Build and Deploy
+# This name is also shown in the status badge.
+name: Build
 
 on:
-  schedule:
-    - cron: '0 5 * * 0'  # 仅周日凌晨5点触发
   push:
-    branches: [main]
   pull_request:
-    branches: [main]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
+  # Rebuild periodically to keep the cache alive:
+  schedule:
+  - cron: '0 */12 * * *'   #每12小时一次
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write  # 发布所需的权限
-
     steps:
+    - name: Check out repository code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # SonarCloud: Shallow clones should be disabled for a better relevancy of analysis
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'zulu'
+    - name: Cache Maven packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.m2
+        key: ${{ runner.os }}-m2-${{ hashFiles('**/*.gradle*', '**/libs.versions.toml', '**/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-m2
+    - name: Cache Gradle packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.gradle/caches
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/libs.versions.toml', '**/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle
+    - name: Cache Jabba JDK installations
+      uses: actions/cache@v4
+      with:
+        path: ~/.jabba
+        key: ${{ runner.os }}-jabba-${{ hashFiles('**/*.sh') }}
+        restore-keys: |
+          ${{ runner.os }}-jabba
+    - name: Cache SonarCloud packages
+      if: github.event_name != 'pull_request'
+      uses: actions/cache@v4
+      with:
+        path: ~/.sonar/cache
+        key: ${{ runner.os }}-sonar
+    - name: Build Shopkeepers
+      run: ./build.sh
+    
+    # 设置日期作为标签名
+    - name: Set date as tag name
+      id: set_tag
+      run: |
+        DATE=$(date +'%Y%m%d-%H%M%S')  # 使用更精确的时间格式，包含秒
+        echo "TAG_NAME=shopkeepers-build-$DATE" >> $GITHUB_ENV
+        echo "Generated Tag: ${{ env.TAG_NAME }}"
+    
+    # 验证构建产物
+    - name: Verify Artifacts
+      run: |
+        ls -la ./build/
+        
+        # 检查构建产物是否存在
+        if ! ls ./build/*.jar 1> /dev/null 2>&1; then
+          echo "::error::No JAR files found in build/"
+          exit 1
+        fi
 
-      # 克隆上游仓库（保持与上游同步的关键修改）
-      - name: Clone Upstream Repository
-        run: git clone --branch master https://github.com/PlayPro/CoreProtect ./external-coreprotect
-
-      # 修改上游的 pom.xml
-      - name: Patch pom.xml
-        working-directory: ./external-coreprotect
-        run: |
-          # 修改版本号和分支参数
-          sed -i '5s|<version>[^<]*</version>|<version>23.4-dev</version>|' pom.xml
-          sed -i '7s|<project.branch></project.branch>|<project.branch>development</project.branch>|' pom.xml
-          cat pom.xml  # 验证修改
-
-      # 设置 Java 环境
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-
-      # Maven 依赖缓存（路径与上游统一）
-      - name: Cache Maven packages
-        uses: actions/cache@v4  # 升级到 v4
-        with:
-          path: ~/.m2
-          key: ${{ runner.os }}-m2-${{ hashFiles('external-coreprotect/pom.xml') }}
-          restore-keys: ${{ runner.os }}-m2-
-
-      # Maven 构建
-      - name: Build with Maven
-        run: mvn -B verify
-        working-directory: ./external-coreprotect
-
-      # 设置日期和短 SHA 作为标签名
-      - name: Set date and short sha as tag name
-        id: set_tag
-        run: |
-          DATE=$(date +'%y%m%d-%H%M')  # 修改日期格式为 yyMMdd-HHmm
-          echo "TAG_NAME=build-$DATE" >> $GITHUB_ENV  # 添加前缀 build-
-          echo "Generated Tag: ${{ env.TAG_NAME }}"
-
-      # 构建后的验证步骤（精确检查两个文件）
-      - name: Verify Artifacts
-        run: |
-          ls -la ./external-coreprotect/target/
-          
-          # 检查核心文件是否存在（泛匹配 CoreProtect-x.x.jar）
-          if ! ls ./external-coreprotect/target/CoreProtect-*.jar; then
-            echo "::error::CoreProtect-*.jar not found"
-            exit 1
-          fi
-
-          echo "Required JAR files exist"
-
-      # 发布文件
-      - name: Auto Release
-        uses: marvinpinto/action-automatic-releases@latest
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          automatic_release_tag: ${{ env.TAG_NAME }}
-          prerelease: false
-          files: ./external-coreprotect/target/*.jar
+        echo "Build artifacts verified successfully"
+    
+    # 上传构建产物到 Artifacts (保留原有的上传步骤)
+    - name: Stage artifacts for upload
+      run: mkdir -p staging && cp build/*.jar staging/
+    - name: Upload artifacts to workflow
+      uses: actions/upload-artifact@v4
+      with:
+        name: Shopkeepers Artifacts
+        path: staging
+        retention-days: 30
+    
+    # 创建 Git 标签 (仅在非PR事件时执行)
+    - name: Create Git Tag
+      if: github.event_name != 'pull_request'
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git tag -a "${{ env.TAG_NAME }}" -m "Automated Shopkeepers build ${{ env.TAG_NAME }}"
+        git push origin "${{ env.TAG_NAME }}"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    # 创建 Release (仅在非PR事件时执行)
+    - name: Create Release
+      if: github.event_name != 'pull_request'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ env.TAG_NAME }}
+        name: "Shopkeepers Build ${{ env.TAG_NAME }}"
+        body: "Automated build of Shopkeepers from ${{ github.ref_name }} branch"
+        files: build/*.jar
+        prerelease: true
+        draft: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
